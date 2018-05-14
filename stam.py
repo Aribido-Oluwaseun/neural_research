@@ -12,17 +12,21 @@ SAVE_MODEL_PATH = '/home/ribex/Desktop/Dev/neural_algo/dataset/pickle_obj'
 
 class STAM:
 
-    def __init__(self, num_train=20000, num_test=20000, num_valid=5000):
+    def __init__(self, num_train=40000, num_test=10000, num_valid=10000):
         self.num_train = num_train
         self.num_test = num_test
         self.num_valid = num_valid
-        self.train_img, self.train_lbl, self.test_img, self.test_lbl = self.get_data()
-        self.valid_img = self.test_img[self.num_test: self.num_test + self.num_valid]
-        self.valid_lbl = self.test_lbl[self.num_test: self.num_test + self.num_valid]
-        self.train_img = self.train_img[0:self.num_train]
-        self.train_lbl = self.train_lbl[0:self.num_train]
-        self.test_img = self.test_img[0:self.num_test]
-        self.test_lbl = self.test_lbl[0:self.num_test]
+        train_img, train_lbl, test_img, test_lbl = self.get_data()
+
+        self.valid_img = train_img[self.num_train: self.num_train + self.num_valid]
+        self.valid_lbl = train_lbl[self.num_train: self.num_train + self.num_valid]
+
+        self.train_img = train_img[0: self.num_train]
+        self.train_lbl = train_lbl[0: self.num_train]
+
+        self.test_img = test_img[0: self.num_test]
+        self.test_lbl = test_lbl[0: self.num_test]
+
         self.tract_predictions = list()
         self.mse_accuracy = list()
         self.simm_accuracy = list()
@@ -92,12 +96,12 @@ class STAM:
 
     def learn_labels(self, validation_data, validation_lbl, W):
         """This function attempts to assign labels to the various images in the converged W"""
-        labels = [[], [], [], [], [], [], [], [], [], []]
+        labels = [[] for _ in range(W.shape[0])]
         actual_labels = list()
         for i in range(validation_data.shape[0]):
             image_similarity = [util.ssim_two_images(W.iloc[j, :], validation_data.iloc[i, :]) for j in range(W.shape[0])]
             index_pos = image_similarity.index(max(image_similarity))
-            labels[index_pos].insert(len(labels[index_pos]), validation_lbl[i])
+            labels[index_pos].append(validation_lbl[i])
 
         for each_label in labels:
             a = list(set(each_label))
@@ -109,14 +113,20 @@ class STAM:
         return actual_labels
 
     def predict(self, W, W_lbl, image, img_lbl):
-        mse_compare = [util.mse_two_images(W.iloc[i, :], image) for i in range(0, W.shape[0])]
+        #mse_compare = [util.mse_two_images(W.iloc[i, :], image) for i in range(0, W.shape[0])]
         simm_compare = [util.ssim_two_images(W.iloc[i, :], image) for i in range(0, W.shape[0])]
         #mse_pred = W_lbl[mse_compare.index(min(mse_compare))]
         simm_pred = W_lbl[simm_compare.index(max(simm_compare))]
         # print img_lbl
         # print 'predicted simm index: ', simm_pred
         # print 'predicted sme index: ', mse_pred
-        self.simm_accuracy.insert(len(self.simm_accuracy), (simm_pred == img_lbl)+0)
+        self.simm_accuracy.append((simm_pred == img_lbl)+0)
+
+    def print_W(self):
+        with open(SAVE_MODEL_PATH, 'rb') as f:
+            W = pickle.load(f)
+        for i in range(W.shape[0]):
+            util.display_image(W.iloc[i, :])
 
 
 class Experiments:
@@ -131,8 +141,8 @@ class Experiments:
         test_label = self.stam_obj.test_lbl
         with open(SAVE_MODEL_PATH, 'rb') as f:
             W = pickle.load(f)
-        W_lbl = [2, 1, 0, 7, 9, 8, 6, 5, 1, 3]
-        for T in range(self.stam_obj.test_img.shape[0]):
+        W_lbl = [2, 1, 0, 7, 7, 3, 6, 5, 1, 3, 9, 4, 2, 6, 6]
+        for T in range(test_data.shape[0]):
             # for each image in the test set, we will predict on them and check the accuracies of mse and simm
             self.stam_obj.predict(W, W_lbl, test_data.iloc[T, :], test_label[T])
         result1 = self.stam_obj.simm_accuracy
@@ -155,15 +165,15 @@ class Experiments:
         labels = self.stam_obj.learn_labels(valid_img, self.stam_obj.valid_lbl, W)
         print labels
 
-    def track_errors_during_training(self):
+    def track_errors_during_training(self, num_of_clusters):
         data = self.stam_obj.make_df(self.stam_obj.train_img)
         W, track_predictions = self.stam_obj.neural_algo(data,
-                                                         num_clusters=10,
+                                                         num_clusters=num_of_clusters,
                                                          iterative_prediction=True)
-        W_lbl = [2, 1, 0, 7, 9, 4, 6, 5, 1, 3] # we learned this by running the learn_labels_after_training experiment
+        W_lbl = [2, 1, 0, 7, 9, 8, 6, 5, 1, 3] # we learned this by running the learn_labels_after_training experiment
         errors =list()
         for i in range(len(track_predictions)):
-            errors.append((self.stam_obj.train_lbl[track_predictions[i][0]] != W_lbl[track_predictions[i][1]]) + 0)
+            errors.append((self.stam_obj.train_lbl[track_predictions[i][0]] == W_lbl[track_predictions[i][1]]) + 0)
         result1 = self.moving_average(errors, 100)
         plt.plot(result1)
         plt.plot(np.unique(range(len(result1))), np.poly1d(np.polyfit(range(len(result1)), result1, 4))(np.unique(range(len(result1)))), linewidth=3)
@@ -172,6 +182,8 @@ class Experiments:
         plt.xlabel('number of training examples')
         plt.show()
 
+    def learn_w_with_less_clusters(self, num_clusters):
+        self.stam_obj.run(num_clusters, display=True)
 
     def moving_average(self, values, window):
         weights = np.repeat(1.0, window) / window
@@ -179,9 +191,10 @@ class Experiments:
         return sma
 
     def run_experiments(self):
-        self.check_training_accuracy()
-        #self.learn_labels_after_traininig(train=False)
-        #self.track_errors_during_training()
+        #self.learn_w_with_less_clusters(10)
+        #self.check_training_accuracy(train=False)
+        #self.learn_labels_after_training(train=False)
+        self.track_errors_during_training(num_of_clusters=10)
 
 
 def main():
