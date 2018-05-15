@@ -13,7 +13,11 @@ def load():
     mndata = MNIST(PATH)
     train_img, train_lbl = mndata.load_training()
     test_img, test_lbl = mndata.load_testing()
-    return np.asarray(train_img), np.asarray(train_lbl), np.asarray(test_img), np.asarray(test_lbl)
+    # note that the image files contain values of 0-255. We should normalize the image files for better performance
+    return np.asarray(train_img).astype(np.double)/255, \
+           np.asarray(train_lbl), \
+           np.asarray(test_img).astype(np.double)/255,\
+           np.asarray(test_lbl)
 
 def display_image(image, rows=28, cols=28):
     plt.imshow(np.asarray(image).reshape(rows, cols), interpolation='nearest')

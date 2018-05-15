@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import cPickle as pickle
 import matplotlib.pyplot as plt
+import os
 
 
 SAVE_MODEL_PATH = '/home/ribex/Desktop/Dev/neural_algo/dataset/pickle_obj'
@@ -51,7 +52,7 @@ class STAM:
         # Initialize W, thetha and n
         indices_of_W = range(0, num_clusters)
         track_predictions = list()
-        if not W:
+        if W is None:
             # We give this option in case we have some learned W for which we want to optimize with further training
             # This is useful if we want to train our algorithm in several epochs.
             W = pd.DataFrame(np.zeros([num_clusters, data.shape[1]]))
@@ -83,10 +84,17 @@ class STAM:
         z_T = -1*a_i_T[c]
         return c, y_i_t, z_T
 
-    def run(self, num_clusters=10, display=None):
+    def run(self, num_clusters=10, display=None, shuffle=False, W=None):
         pickle_obj = None
-        df = self.make_df(self.train_img)
-        W = self.neural_algo(df, num_clusters, iterative_prediction=False)
+        if not shuffle:
+            df = self.make_df(self.train_img)
+        else:
+            df = self.make_df(self.train_img).sample(frac=1)
+        if W is None:
+            W = self.neural_algo(df, num_clusters, iterative_prediction=False)
+        else:
+            W = W.sample(frac=1)
+            W = self.neural_algo(df, num_clusters, iterative_prediction=False, W=W)
         if display:
             for i in range(num_clusters):
                 util.display_image(np.asarray(W.iloc[i, :]))
@@ -141,7 +149,7 @@ class Experiments:
         test_label = self.stam_obj.test_lbl
         with open(SAVE_MODEL_PATH, 'rb') as f:
             W = pickle.load(f)
-        W_lbl = [2, 1, 0, 7, 7, 3, 6, 5, 1, 3, 9, 4, 2, 6, 6]
+        W_lbl = [7, 4, 8, 3, 6, 9, 2, 5, 2, 0, 1, 9, 8, 6, 1]
         for T in range(test_data.shape[0]):
             # for each image in the test set, we will predict on them and check the accuracies of mse and simm
             self.stam_obj.predict(W, W_lbl, test_data.iloc[T, :], test_label[T])
@@ -182,8 +190,18 @@ class Experiments:
         plt.xlabel('number of training examples')
         plt.show()
 
-    def learn_w_with_less_clusters(self, num_clusters):
-        self.stam_obj.run(num_clusters, display=True)
+    def learn_w_with_set_clusters(self, num_clusters, shuffle=False, use_saved_W=False, num_epochs=0):
+        for i in range(num_epochs):
+            if use_saved_W:
+                if os.path.exists(SAVE_MODEL_PATH):
+                    with open(SAVE_MODEL_PATH, 'rb') as f:
+                        W = pickle.load(f)
+                        self.stam_obj.run(num_clusters, display=False, shuffle=shuffle, W=W)
+                else:
+                    self.stam_obj.run(num_clusters, display=False, shuffle=shuffle)
+
+            else:
+                self.stam_obj.run(num_clusters, display=False, shuffle=shuffle)
 
     def moving_average(self, values, window):
         weights = np.repeat(1.0, window) / window
@@ -191,10 +209,12 @@ class Experiments:
         return sma
 
     def run_experiments(self):
-        #self.learn_w_with_less_clusters(10)
-        #self.check_training_accuracy(train=False)
+        #self.learn_w_with_set_clusters(15, True, True, 4)
         #self.learn_labels_after_training(train=False)
-        self.track_errors_during_training(num_of_clusters=10)
+        self.check_training_accuracy(train=False)
+        #self.track_errors_during_training(num_of_clusters=15)
+        #self.stam_obj.print_W()
+        pass
 
 
 def main():
