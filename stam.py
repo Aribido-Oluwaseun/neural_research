@@ -6,6 +6,7 @@ import numpy as np
 import cPickle as pickle
 import matplotlib.pyplot as plt
 import os
+import random
 import copy
 
 
@@ -41,6 +42,9 @@ class STAM:
     def get_data(self):
         return util.load()
 
+    def get_cluster_labels(self, num):
+        return self.cluster_labels[0: num]
+
     def get_prep_data(self, type='train'):
         if type == 'train':
             return self.make_df(self.train_img), self.train_lbl
@@ -61,21 +65,22 @@ class STAM:
         df = pd.DataFrame(data=data, index=range(len(data)))
         return df
 
+
     def balanced_order(self, data, lbl):
         print 'please wait, generating balanced order data...'
         build_indices = list()
         data['lbl'] = lbl
-        data = data.sort_values('lbl') # sort based on the labels
-        ten_value_index = [list(data['lbl']).index(x) for x in range(10)]
+        data = data.sort_values('lbl')  # sort based on the labels
+        ten_value_index = [list(data.iloc[:, -1]).index(x) for x in range(10)]
         ten_value_index = np.asarray(ten_value_index)
         indices = np.asarray(data.index.tolist())
         print 'building indices...'
-        for i in range(int(data.shape[0]/10.0)):
+        for i in range(int(data.shape[0] / 10.0)):
+            temp = indices[ten_value_index]
+            random.shuffle(temp)
+            build_indices.extend(indices[ten_value_index])
             ten_value_index += 1
-            temp = np.random.choice(a=indices[ten_value_index], size=len(ten_value_index), replace=False)
-            build_indices.extend(temp)
-        print 'balanced order indices generated successfully!'
-
+        data = data.reindex(index=range(data.shape[0]))
         data = data.iloc[build_indices, :]
         print 'balanced order data created successfully...\n'
         return data
@@ -102,7 +107,7 @@ class STAM:
         # classes in the mnist dataset no matter what.
         # Initialize W, thetha and n
         indices_of_W = range(0, num_clusters)
-        track_predictions = list()
+        track_predictions = [[] for _ in range(num_clusters)]
         df = None
         if order == 'BALANCED_ORDER':
             df = self.balanced_order(data=data, lbl=lbl)
@@ -155,17 +160,16 @@ class STAM:
                 matrix.iloc[c, int(df.iloc[T, -1])] += 1
 
             if iterative_prediction:
-                print 'iteractive prediction activated. Generating accuracy for each example...'
+                if not get_mapping_matrix:
+                    raise ('to get interative prediction, get_mapping_matrix must be set to true!')
+
                 # for iterative prediction we will have to stick to a sequential iteration of the data to track the
-                # various predictions of W_i. However, to introduce some randomness, we suggest the data should be
-                # randomized before feeding it into this algorithm.
-                best_image_value = [util.ssim_two_images(W.iloc[i, :], data.iloc[T, :]) for i in indices_of_W]
-                index = best_image_value.index(max(best_image_value))
-                track_predictions.insert(len(track_predictions), (T, index))
+                # maximum proportion of each example.
+                track_predictions[c].append(max(matrix.iloc[c, :]/np.double(np.sum(matrix.iloc[c, :]))))
 
         print 'neural algorithm completed! \n'
         if iterative_prediction:
-            return 0.5 * W, track_predictions
+            return 0.5 * W, matrix, track_predictions
         if get_mapping_matrix:
             return 0.5 * W, matrix
         return 0.5 * W, 0
@@ -182,12 +186,14 @@ class STAM:
             get_mapping_matrix=False, W_init=None):
 
         if get_iterative_prediction:
-            W, pred = self.neural_algo(data, lbl, W=W, num_clusters=num_clusters, iterative_prediction=get_iterative_prediction,
+            W, pred = self.neural_algo(data, lbl, W=W, num_clusters=num_clusters,
+                                       iterative_prediction=get_iterative_prediction,
                                        get_mapping_matrix=get_mapping_matrix, order=order, W_init=W_init)
             W.to_pickle(SAVE_MODEL_PATH)
             return W, pred
         elif get_mapping_matrix:
-            W, matrix = self.neural_algo(data, lbl, W=W, num_clusters=num_clusters, iterative_prediction=get_iterative_prediction,
+            W, matrix = self.neural_algo(data, lbl, W=W, num_clusters=num_clusters,
+                                         iterative_prediction=get_iterative_prediction,
                                        get_mapping_matrix=get_mapping_matrix, order=order, W_init=W_init)
             W.to_pickle(SAVE_MODEL_PATH)
             return W, matrix
@@ -260,24 +266,32 @@ class Experiments:
         labels = self.stam_obj.learn_labels(valid_img, self.stam_obj.valid_lbl, W)
         print labels
 
-    def track_errors_during_training(self, num_of_clusters):
+    def track_data_required_for_training(self, num_clusters=10,
+                                       iterative_prediction=False,
+                                       get_mapping_matrix=False, order='RANDOM_ORDER', W_init='RND_INT'):
         data, lbl = self.stam_obj.get_prep_data(type='train')
-        W, track_predictions = self.stam_obj.neural_algo(data,
-                                                         num_clusters=num_of_clusters,
-                                                         iterative_prediction=True)
-        W_lbl = [2, 1, 0, 7, 9, 8, 6, 5, 1, 3] # we learned this by running the learn_labels_after_training experiment
-        errors =list()
-        for i in range(len(track_predictions)):
-            errors.append((self.stam_obj.train_lbl[track_predictions[i][0]] == W_lbl[track_predictions[i][1]]) + 0)
-        result1 = self.moving_average(errors, 100)
-        plt.plot(result1)
-        plt.plot(np.unique(range(len(result1))), np.poly1d(np.polyfit(range(len(result1)), result1, 4))(np.unique(range(len(result1)))), linewidth=3)
-        plt.title('tracking error during training')
-        plt.ylabel('error')
-        plt.xlabel('number of training examples')
+        W, matrix, track_predictions = self.stam_obj.neural_algo(data, lbl, num_clusters=num_clusters,
+                                       iterative_prediction=iterative_prediction,
+                                       get_mapping_matrix=get_mapping_matrix, order=order, W_init=W_init)
+        W.to_pickle(SAVE_MODEL_PATH)
+        print matrix
+        name = order+'_'+W_init+'.xlsx'
+        writer = pd.ExcelWriter(name)
+        matrix.to_excel(writer, 'Sheet1')
+        writer.save()
+        self.stam_obj.print_W()
+
+        for i in range(num_clusters):
+            plt.plot(range(len(track_predictions[i])), track_predictions[i])
+        plt.legend(self.stam_obj.get_cluster_labels(num_clusters))
+        plt.title('tracking maximum prediction proportion during training')
+        plt.ylabel('maximum prediction proportion during training')
+        plt.xlabel('number of training examples seen so far')
         plt.show()
 
-    def learn_w_with_set_clusters(self, data, lbl, num_clusters, shuffle=False, use_saved_W=False, num_epochs=0, get_mapping_matrix=False, order=None, W_init=None):
+
+    def learn_w_with_set_clusters(self, data, lbl, num_clusters, use_saved_W=False, num_epochs=0,
+                                  get_mapping_matrix=False, order=None, W_init=None):
         matrix = None
         for i in range(num_epochs):
             if use_saved_W:
@@ -291,7 +305,12 @@ class Experiments:
             else:
                 _, matrix = self.stam_obj.run(data, lbl, num_clusters=num_clusters,
                                               get_mapping_matrix=get_mapping_matrix, order=order, W_init=W_init)
-        return matrix
+        print matrix
+        name = order + '_' + W_init + '.xlsx'
+        writer = pd.ExcelWriter(name)
+        matrix.to_excel(writer, 'Sheet1')
+        writer.save()
+        self.stam_obj.print_W()
 
     def moving_average(self, values, window):
         weights = np.repeat(1.0, window) / window
@@ -299,24 +318,31 @@ class Experiments:
         return sma
 
     def run_experiments(self):
-        train, train_lbl = self.stam_obj.get_prep_data(type='train')
-        test, test_lbl = self.stam_obj.get_prep_data(type='test')
-        num_clusters = 10
         # settings for DataFrame display
         pd.set_option('display.max_rows', 1000)
         pd.set_option('display.max_columns', 1000)
         pd.set_option('display.width', 1000)
+        #############################################################################
+        # train, train_lbl = self.stam_obj.get_prep_data(type='train')
+        # test, test_lbl = self.stam_obj.get_prep_data(type='test')
+        # num_clusters = 10
+        # self.learn_w_with_set_clusters(train, train_lbl, num_clusters=num_clusters, use_saved_W=True,
+        #                                         num_epochs=2,
+        #                                         get_mapping_matrix=True, order='RANDOM_ORDER', W_init='RND_INT')
+        #
+        #############################################################################
+
+        self.track_data_required_for_training(num_clusters=10,
+                                       iterative_prediction=True,
+                                       get_mapping_matrix=True, order='BALANCED_ORDER', W_init='OPT_INT')
+
+
+
+
+        #############################################################################
         #self.learn_labels_after_training(train=False)
         #self.check_training_accuracy(train=False)
         #self.track_errors_during_training(num_of_clusters=15)
-        matrix = self.learn_w_with_set_clusters(train, train_lbl, num_clusters=num_clusters, use_saved_W=False, num_epochs=1,
-                                                get_mapping_matrix=True, order='BALANCED_ORDER', W_init='RND_INT')
-        print matrix
-        writer = pd.ExcelWriter('rnd_init_uni_seq.xlsx')
-        matrix.to_excel(writer, 'Sheet1')
-        writer.save()
-        self.stam_obj.print_W()
-
 
 
 def main():
