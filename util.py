@@ -35,6 +35,66 @@ class Data_Processing:
     def run(self):
         return self.train_img, self.train_lbl, self.test_img, self.test_lbl
 
+    @staticmethod
+    def random_order(data, lbl, seed=None):
+        if seed is not None:
+            np.random.seed(seed)
+        print 'please wait, generating random order data...'
+        lbl = lbl.reshape(len(lbl), 1)
+        data = np.append(data, lbl, axis=1)
+        np.random.shuffle(data)
+        return data[:, :-1], data[:, -1].astype(np.int)
+
+    @staticmethod
+    def balanced_order(data, lbl, seed=None):
+        if seed is not None:
+            np.random.seed(seed)
+        data_size = data.shape[0]
+        print 'generating balanced order data for experiment...'
+        data = pd.DataFrame(data=data, columns=range(data.shape[1]))
+        data['lbl'] = lbl
+        data_holder = [[] for _ in range(10)]
+        for i in range(data.shape[0]):
+            data_holder[int(data.iloc[i, -1])].append(data.iloc[i, :])
+        df = pd.DataFrame(data=np.zeros([data.shape[0], data.shape[1]]))
+        count = 0
+        while data_size > 1:
+            digits = np.random.choice(a=range(0, 10), size=10, replace=False)
+            for j in digits:
+                df.iloc[count, :-1] = data_holder[j][np.random.choice(
+                    a=range(len(data_holder[j])), size=1, replace=False)[0]]
+                df.iloc[count, -1] = int(j)
+                count += 1
+            data_size -= 10
+        data = df
+        data = data.reset_index(drop=True)
+        print 'balanced order data generated!\n'
+        return data.values[:, :-1], data.values[:, -1].astype(np.int)
+
+    @staticmethod
+    def extract_unique_m_images(images, label, m, clusters=10):
+        """
+        This function extracts unique images from the random images and labels passed in.
+        :param images:
+        :param label:
+        :param m:
+        :param clusters:
+        :return: a numpy array of images and their labels
+        """
+        store_images = np.zeros([clusters*m, images.shape[1]])
+        store_lbls = list()
+        label_count = [m for _ in range(clusters)]
+        count = 0
+        while sum(label_count) > 0:
+            inds = np.random.choice(range(images.shape[0]), size=clusters, replace=False)
+            selected_lbls = label[inds]
+            for i in range(len(inds)):
+                if label_count[selected_lbls[i]] > 0:
+                    store_images[count, :] = images[inds[i], :]
+                    store_lbls.append(selected_lbls[i])
+                    count += 1
+                    label_count[selected_lbls[i]] -= 1
+        return store_images, store_lbls
 
     def load_cifar_names(self):
         filename = os.path.join(CIFAR, 'batches.meta')
@@ -43,13 +103,12 @@ class Data_Processing:
 
 
     def load_data(self, type_data='mnist'):
-
         if type_data == 'mnist':
             mndata = MNIST(PATH)
             train_img, train_lbl = mndata.load_training()
             test_img, test_lbl = mndata.load_testing()
             # note that the image files contain values of 0-255. We should normalize the image files for better performance
-            return np.asarray(train_img).astype(np.double), np.asarray(train_lbl), np.asarray(test_img).astype(np.double), np.asarray(test_lbl)
+            return np.asarray(train_img).astype(np.double), np.array(train_lbl), np.asarray(test_img).astype(np.double), np.asarray(test_lbl)
 
         elif type_data == 'cifar':
             all_files = os.listdir(CIFAR)
@@ -139,7 +198,7 @@ class Data_Processing:
         X_train = X_train.astype('float32')
         X_test = X_test.astype('float32')
         # define data preparation
-        #datagen = ImageDataGenerator()
+        #datagen = ImageDataGenerator(featurewise_center=True)
         datagen = ImageDataGenerator(zca_whitening=True)
         datagen.fit(X_train)
         count = 0
@@ -153,7 +212,6 @@ class Data_Processing:
             count += batch
         count = 0
         stop_count = test_img.shape[0]
-
         for X_batch, y_batch in datagen.flow(X_test, y_test, batch_size=batch):
             if count == stop_count:
                 break
