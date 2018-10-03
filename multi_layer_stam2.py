@@ -6,6 +6,8 @@ from matplotlib import gridspec
 from warnings import warn
 import copy
 
+SAVE_IMAGE_PATH = '/Users/joseph/Desktop/Dev/neural_algo/imgs/'
+
 class Hierarchy_STAM_Exception(Exception):
     "Defines errors related to Hierarchical_STAMs"
 
@@ -17,7 +19,7 @@ class STAM_Exception(Exception):
 class STAM:
 
     def __init__(self, num_clusters, stam_id, rf_size, layer, init_images, init_lbls, init_W=None,
-                 img_len=49, alpha=0.01, max_layer=1):
+                 img_len=49, alpha=0.01, max_layer=1, seed=None):
         self.num_clusters = num_clusters
         self.stam_id = stam_id
         self.rf_size = rf_size
@@ -27,9 +29,12 @@ class STAM:
         self.alpha = alpha
         self.init_images = init_images
         self.init_lbls = init_lbls
+        self.stat = []
+        self.n = 0
+        self.seed = seed
         self.max_layer = max_layer
         self.W = self.initialize_W(init_type=self.init_w, clusters=self.num_clusters, images=init_images,
-                                   label=init_lbls, img_len=self.img_len, layer=self.layer)
+                                   label=init_lbls, img_len=self.img_len, layer=self.layer, seed=self.seed)
         self.check_parameters()
 
     def __call__(self, image, lbl, output_type):
@@ -55,16 +60,33 @@ class STAM:
         :param lbl: the label of the image
         :return:
         """
-        # print image.shape
+
         assert(image.shape == (1, max(image.shape)))
-        (c_ind, c_dist, d_ind, d_dist) = self.distance(self.W, image)
-        self.W[c_ind, :] = (1 - self.alpha) * self.W[c_ind, :] + self.alpha * image
+        #np.random.shuffle(self.W)
+        (c_ind, c_dist, d_ind, d_dist) = self.distance(self.W, image, layer=self.layer)
+        # if self.layer < self.max_layer:
+        #     print c_ind
+        # self.n += 1
+        # temp1 = (image - self.W[c_ind])/self.n
+        # temp1 = temp1 + self.W[c_ind]
+        # self.W[c_ind] = temp1
+        # if self.layer ==1:
+        #     print c_ind
+        # else:
+
+        # else:
+        temp1 = image * self.alpha
+        temp2 = (1 - self.alpha) * self.W[c_ind]
+        temp3 = temp1 + temp2
+        self.W[c_ind] = temp3
+
+        self.stat.append((lbl, c_ind))
         if output_type == 'one_centroid':
             return self.W[c_ind, :].reshape(1, self.W.shape[1])
         elif output_type == 'all_centroid':
             return self.W
 
-    def initialize_W(self, init_type, clusters, images, label, img_len, layer=0):
+    def initialize_W(self, init_type, clusters, images, label, img_len, layer=0, seed=None):
         """
         This function initializes the centroid we want to use.
         :param init_type: specifies the initialization type.
@@ -77,16 +99,17 @@ class STAM:
         """
         if init_type == 'opt':
             if layer < self.max_layer:
-                W = self.initialize_receptive_field_clusters(images, label, clusters, img_len=img_len, layer=layer)
+                W = self.initialize_receptive_field_clusters(images, rf_size=self.rf_size,
+                                                             clusters=clusters, img_len=img_len, layer=layer, seed=seed)
             else:
-                W = self.initialize_averaged_clusters(images, label, clusters=clusters)
+                W = self.initialize_averaged_clusters(images=images, label=label, clusters=clusters)
         elif init_type == 'random':
-            W = np.random.rand(clusters, img_len)*0.01
+            W = np.random.rand(clusters, img_len)
         elif init_type == 'zero':
             W = np.zeros([clusters, img_len])
         return W
 
-    def initialize_averaged_clusters(self, images, label, clusters):
+    def initialize_averaged_clusters(self, images, label, clusters=10, m=2):
         """
         This function creates the average of the 10 clusters
         :param images: image dataset
@@ -95,12 +118,13 @@ class STAM:
         :param m: the number of averaged examples per cluster
         :return: the initialized centroids and the labels
         """
-        label = np.array(label)
-        m = int(images.shape[0]/clusters)
+        print 'initializing layer-2 STAMs. please wait....'
+        init_labels = range(10)
         W = np.zeros([clusters, images.shape[1]])
         label_count = [m for _ in range(clusters)]
+        label = np.array(copy.deepcopy(label))
         while sum(label_count) > 0:
-            inds = np.random.choice(range(images.shape[0]), size=clusters, replace=False)
+            inds = np.random.choice(range(images.shape[0]), size=10, replace=False)
             selected_labels = label[inds]
             for i in range(len(inds)):
                 if label_count[selected_labels[i]] > 0:
@@ -109,7 +133,7 @@ class STAM:
         W = W / m
         return W
 
-    def initialize_receptive_field_clusters(self, init_images, init_labels, clusters, img_len, layer=0, seed=None):
+    def initialize_receptive_field_clusters(self, init_images, rf_size, clusters, img_len, layer=0, seed=None):
         """
         Here we create layer 1 centroids using the receptive fields from the images
         :param W: the centroid of the stam to be initialized
@@ -122,39 +146,40 @@ class STAM:
         """
         if seed is not None:
             np.random.seed(seed)
+        init_images = copy.deepcopy(init_images)
         np.random.shuffle(init_images)
         W = np.zeros([clusters, img_len])
-        rf_size = int(np.sqrt(W.shape[1]))
+        #rf_size = int(np.sqrt(W.shape[1]))
         orignal_img_sz = int(np.sqrt(init_images.shape[1]))
         for i in range(W.shape[0]):
             # recall that receptive takes in an image that is shape (1, dimension of image)
             rf_images = Hierarchy_STAM.create_receptive_field(init_images[i, :].reshape(1, orignal_img_sz*orignal_img_sz),
-                                                              rf_size=7, stride=3, layer=layer)
+                                                              rf_size=4, stride=2, layer=layer)
             if rf_images.shape[0] < W.shape[0]:
                 raise STAM_Exception('incompatible initialization setup')
             W[i, :] = W[i, :] + rf_images[i, :]
         return W
 
-    def distance(self, W, x_t):
+    def distance(self, W, x_t, layer):
         """
         This function calculates the smallest distances between each centroid in W and x_t
         :param W: matrix of centroids
         :param x_t: example image
         :return: the smallest two distances and their indices
         """
+
         distances = np.square(np.linalg.norm(W - x_t, ord=2, axis=1))
-        # if self.opt is False:
-        #     print distances
         indices = distances.argsort()[:2]
         c_ind, d_ind = indices[0], indices[1]
         c_dist, d_dist = distances[indices]
         return (int(c_ind), c_dist, int(d_ind), d_dist)
 
-    def get_w(self, stam_id, layer):
-        if layer == self.layer and stam_id == stam_id:
-            return self.W
-        else:
-            raise STAM_Exception('layer or stam_id mismatch error!')
+    def get_w(self):
+        return self.W
+
+
+    def get_stat(self):
+        return self.stat
 
     def print_centroid(self, W, figure=0):
         """
@@ -172,9 +197,9 @@ class STAM:
 
 class Hierarchy_STAM:
 
-    def __init__(self, data, lbl, init_images, init_lbls, stride=[2, 1], layers=2, neurons=(5, 10), red_dim=(2, 1), rf_size=[4, 26],
-                output=('one_centroid', 'all_centroid'), init_type=('opt', 'zero'), alpha=0.01):
-
+    def __init__(self, data, lbl, init_images, init_lbls, stride=[2, 1], layers=2,
+                 neurons=(5, 10), red_dim=(2, 1), rf_size=[4, 26], output=('one_centroid', 'all_centroid'),
+                 init_type=('opt', 'zero'), alpha=0.01, seed=None):
         self.data = data
         self.count = 0
         self.lbl = lbl
@@ -188,7 +213,12 @@ class Hierarchy_STAM:
         self.n_i = {}
         self.layer = 0
         self.init_type = init_type
-        self.params = self.intilialize_paramters(init_images, init_lbls, neurons, stride, red_dim, rf_size, alpha, output, init_type)
+        self.init_images = init_images
+        self.init_lbls = init_lbls
+        self.cent = None
+        self.stams = {}
+        self.params = self.intilialize_paramters(init_images, init_lbls, neurons, stride,
+                                                 red_dim, rf_size, alpha, output, init_type)
 
     def intilialize_paramters(self, init_images, init_lbls, neurons, stride, red_dim, rf_size, alpha, output, init_type):
         """
@@ -242,31 +272,37 @@ class Hierarchy_STAM:
 
         # initialize the STAM modules...
         for i in range(self.layers):
-            stams[i] = [STAM(num_clusters=neurons[i], stam_id=k, rf_size=rf_size[i],
-                                  layer=i, init_images=init_images, init_lbls=init_lbls, init_W=init_type[i],
-                                  img_len=rf_size[i]*rf_size[i], alpha=alpha) for k in range(num_stams[i])]
-            params['neurons'] = neurons
-            params['stride'] = stride
-            params['red_dim'] = red_dim
-            params['rf_size'] = rf_size
-            params['alpha'] = alpha
-            params['num_stams'] = num_stams
-            params['output'] = output
-            params['overlap'] = overlap
-            params['stams'] = stams
+            print 'initializing layer-{} STAMs. please wait....'.format(i+1)
+            self.stams[i] = [STAM(num_clusters=neurons[i], stam_id=k, rf_size=rf_size[i],
+                              layer=i, init_images=init_images, init_lbls=init_lbls, init_W=init_type[i],
+                              img_len=rf_size[i]*rf_size[i], alpha=alpha, max_layer=self.layers-1) for k in range(num_stams[i])]
+
+
+
+        params['neurons'] = neurons
+        params['stride'] = stride
+        params['red_dim'] = red_dim
+        params['rf_size'] = rf_size
+        params['alpha'] = alpha
+        params['num_stams'] = num_stams
+        params['output'] = output
+        params['overlap'] = overlap
+        print 'initialization complete! proceeding with iteration over images... \n \n'
         return params
 
     def run(self, data, lbl):
         t = 0
         while t < data.shape[0]:
             layer = 0
-            if t > 1 and t%50 == 0:
+            if t > 1 and t % 50 == 0:
                 print '{} images completed!'.format(t)
-            #image = data.iloc[t, :].values.reshape(1, len(data.iloc[t, :]))
             image = data[t, :].reshape(1, data.shape[1])
-            while layer < self.layers:
-                image = self.learn(image=image, lbl=int(lbl[t]), layer=layer)
+            while layer < self.layers-1:
+                new_image = self.learn(image=image, lbl=int(lbl[t]), layer=layer)
                 layer += 1
+                # plt.imshow(new_image.reshape(28, 28))
+                # plt.show()
+                self.learn(image=new_image, lbl=int(lbl[t]), layer=layer)
             t += 1
 
     def learn(self, image, lbl, layer):
@@ -287,32 +323,45 @@ class Hierarchy_STAM:
         # each stam is a different instance of a general STAM module. the __call__() function allows us to call the
         # STAM instance as stam(image=image, lbl=label, output_type='output_type')
 
-        self.weights[layer] = [self.params['stams'][layer][k](image=images[k, :].reshape(1, images.shape[1]),
+        self.weights[layer] = [self.stams[layer][k](image=images[k, :].reshape(1, images.shape[1]),
                                                               lbl=lbl, output_type=self.params['output'][layer])
-                               for k in range(len(self.params['stams'][layer]))]
-
-        # reshape the list of images in self.weights[layer] into an N by M matrix
-        array_length = len(self.weights[layer])
-        one_arr_length = self.weights[layer][0].shape[1]
-        self.weights[layer] = np.array(self.weights[layer]).reshape(array_length, one_arr_length)
+                               for k in range(len(self.stams[layer]))]
 
         if layer < self.layers-1:
+            # reshape the list of images in self.weights[layer] into an N by M matrix
+            array_length = len(self.weights[layer])
+            one_arr_length = self.weights[layer][0].shape[1]
+            self.weights[layer] = np.array(self.weights[layer]).reshape(array_length, one_arr_length)
+
             if self.params['red_dim'][layer] > 1:
                 self.weights[layer] = self.reduce_dimension(self.weights[layer], dim=self.params['red_dim'][layer],
                                                              type='average')
             if self.params['overlap'][layer] > 0:
                 image_vector = self.squeeze_image(images=self.weights[layer], shift=self.params['overlap'][layer])
             else:
-                image_vector = self.assemble_imae(data=self.weights[layer], sep=abs(self.params['overlap'][layer]))
+                image_vector = self.assemble_image(data=self.weights[layer], sep=abs(self.params['overlap'][layer]))
+            m, n = image_vector.shape
+            # we reshape the image vector before passing it to higher layers
+            image_vector = image_vector.reshape(1, m*n)
             return image_vector
-            # todo: Feedback to be implemented here...
         else:
-            image_vector = self.assemble_image(data=self.weights[layer], sep=self.params['overlap'][layer])
-            return image_vector
+            #self.cent = self.assemble_image(self.weights[layer][0], 0)
+            pass
+            # todo: feedback to be implemented here...
+            # do nothing. This is the final layer
+            #return self.weights[layer][0]
             # we do not return the image in the last layer because this is the last step in the heirarchy.
 
-    def get_stams(self, layer):
-        return self.params['stams'][layer-1]
+    def get_weight(self, layer, stam_id):
+        stam = self.stams[layer-1][stam_id]
+        return stam.W
+
+    def get_stat(self, layer, stam_id):
+        stats = self.stams[layer-1][stam_id].get_stat()
+        return stats
+
+    def feedback(self, l_image, h_image, epsilon, max_iter):
+        pass
 
     def reduce_dimension(self, image, dim=2, type='ave', seed=None, print_det=False):
         """
@@ -325,14 +374,12 @@ class Hierarchy_STAM:
         if seed is not None:
             np.random.seed(seed)
         # create an empty pd of the desired DataFrame
-
         actual_dim = int(np.sqrt(image.shape[1]))
         desired_dim = int(actual_dim / dim)
         new_image = np.zeros(image.shape[0], desired_dim*desired_dim)
         if print_det:
             print 'actual_dim: ', actual_dim
             print 'desired_dim: ', desired_dim
-
         if actual_dim % dim != 0:
             warning = ('attempting to resize image of size {} '
                        'to size {}').format(actual_dim, desired_dim)
@@ -413,13 +460,12 @@ class Hierarchy_STAM:
         row = int(np.sqrt(image.shape[1]))
         image = image.reshape(row, row)
         track_row = 0
-        image = pd.DataFrame(data=image)
         while (track_row < image.shape[0] - rf_size + 1):
             track_col = 0
             while (track_col < image.shape[0] - rf_size + 1):
-                rf = image.iloc[track_row:track_row + rf_size, track_col:track_col + rf_size]
+                rf = image[track_row:track_row + rf_size, track_col:track_col + rf_size]
                 track_col += stride
-                store_rf.append(list(rf.values.reshape(rf_size * rf_size, )))
+                store_rf.append(list(rf.reshape(rf_size * rf_size, )))
             track_row += stride
         store_rf = np.asarray(store_rf)
         if len(store_rf) == 0:
@@ -461,40 +507,99 @@ class Hierarchy_STAM:
             temp2 = np.concatenate([temp2, keep_one_row[j][-1 * c:, :]], axis=0)
         return temp2
 
+    def accuracy_matrix(self, stat, row, col):
+        matrix = np.zeros([row, col])
+        matrix[:, 0] = np.ones([row, ])
+        per_cluster_acc = [[] for _ in range(row)]
+        for i in range(stat.shape[0]):
+            matrix[stat[i, 1], stat[i, 0]] += 1
+            per_cluster_acc[stat[i, 0]].append(float(matrix[stat[i, 0], stat[i, 0]]) / sum(matrix[stat[i, 0], :]))
+        temp = matrix[:, 0] - np.ones([row, ])
+        matrix[:, 0] = temp
+        return matrix, per_cluster_acc
 
 
 def test_red_dimension():
-
-    np.random.seed(4)
+    seed = None
     np.set_printoptions(threshold=np.inf, linewidth=np.inf)
-    images, lbl, _, _ = util.Data_Processing(num_train=200, preprocessing='scaled').run()
-    images, lbl = util.Data_Processing.random_order(images, lbl)
-    init_images, init_lbls = util.Data_Processing.extract_unique_m_images(images=images[0:150, :], label=lbl[:150], m=6)
-    images = images[150:200, :]
-    lbl = lbl[150:200]
-    stride = [3, 1]
+    images, lbl, _, _ = util.Data_Processing(num_train=10000, preprocessing='scaled').run()
+    images, lbl = util.Data_Processing.random_order(images, lbl, seed=1)
+    init_images, init_lbls = util.Data_Processing.extract_unique_m_images(images[1:1000, :], lbl[1:1000], m=17)
+    images = images[1000:9000, :]
+    lbl = lbl[1000:9000]
+    stride = [2, 1]
     layers = 2
-    neurons = (40, 10)
+    neurons = (169, 10)
     red_dim = (1, 1)
-    rf_size = [7, 28]
+    rf_size = [4, 28]
     output = ('one_centroid', 'all_centroid')
     init_type = ('opt', 'opt')
     alpha = 0.01
-    h_stam = Hierarchy_STAM(data=images, lbl=lbl, init_images=init_images, init_lbls=init_lbls, stride=stride, layers=2,
+
+    h_stam = Hierarchy_STAM(data=images, lbl=lbl, init_images=init_images, init_lbls=init_lbls, stride=stride, layers=layers,
                             neurons=neurons, red_dim=red_dim, rf_size=rf_size, output=output,
-                            init_type=init_type, alpha=alpha)
-    # stam = STAM(num_clusters=neurons[0], stam_id=0, rf_size=rf_size[0],
-    #      layer=0, init_images=init_images,  init_lbls=init_lbls, init_W=init_type[0], img_len=rf_size[0]*rf_size[0],
-    #      alpha=alpha)
-    #c = stam(images[0, 300:349].reshape(1, 49), 1, output[0])
-    plt.figure(0)
-    print images.shape
-    plt.imshow(images[0, :].reshape(28, 28))
-    plt.show()
-    plt.figure(1)
-    squeezed_image = h_stam.learn(image=images[0, :].reshape(1, 784), lbl=lbl[0], layer=0)
-    plt.imshow(squeezed_image)
+                            init_type=init_type, alpha=alpha, seed=seed)
+
+    ## Get layer-2 initialization results:
+    w = h_stam.get_weight(2, 0)
+    for i in range(w.shape[0]):
+        plt.subplot(2, 5, i+1)
+        plt.imshow(w[i, :].reshape(28, 28))
+        plt.axis('off')
     plt.show()
 
+    ## Get layer-1 initialization results:
+    for k in [70, 109]:
+        w1 = h_stam.get_weight(1, k)
+        # w2 = h_stam.assemble_image(w1, sep=0)
+        # plt.imshow(w2)
+        plt.show()
+        for i in range(w1.shape[0]):
+            plt.subplot(13, 13, i + 1)
+            plt.imshow(w1[i, :].reshape(4, 4))
+            plt.axis('off')
+        plt.show()
+
+    h_stam.run(data=images, lbl=lbl)
+
+    ## Get Layer 2 stats
+    w = h_stam.get_weight(2, 0)
+    stat = h_stam.get_stat(2, 0)
+    stat = np.array(stat)
+    matrix, cluster_acc = h_stam.accuracy_matrix(stat, neurons[1], neurons[1])
+    for i in range(w.shape[0]):
+        plt.subplot(2, 5, i+1)
+        plt.imshow(w[i, :].reshape(28, 28))
+        plt.axis('off')
+    plt.show()
+    for i in range(len(cluster_acc)):
+        plt.plot(cluster_acc[i])
+    plt.title('Cluster Accuracy')
+    plt.legend(['cluster: {}'.format(i) for i in range(neurons[1])])
+    plt.show()
+    print matrix
+    save_loc = SAVE_IMAGE_PATH + 'layer2.xlsx'
+    writer = pd.ExcelWriter(save_loc)
+    pd.DataFrame(matrix).to_excel(writer, 'Sheet1')
+    writer.save()
+
+    ## Get Layer 1 stats
+    for k in [70, 109]:
+        w1 = h_stam.get_weight(1, k)
+        #w2 = h_stam.assemble_image(w1, sep=0)
+        stat1 = np.array(h_stam.get_stat(1, k))
+        matrix, _ = h_stam.accuracy_matrix(stat1, neurons[0], neurons[1])
+        # plt.imshow(w2)
+        # plt.show()
+        for i in range(w1.shape[0]):
+            plt.subplot(13, 13, i + 1)
+            plt.imshow(w1[i, :].reshape(4, 4))
+            plt.axis('off')
+        plt.show()
+        print matrix
+        save_loc = SAVE_IMAGE_PATH + 'layer0-{}.xlsx'.format(k)
+        writer = pd.ExcelWriter(save_loc)
+        pd.DataFrame(matrix).to_excel(writer, 'Sheet1')
+        writer.save()
 
 test_red_dimension()
