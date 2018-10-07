@@ -18,7 +18,7 @@ class STAM_Exception(Exception):
 
 class STAM:
 
-    def __init__(self, num_clusters, stam_id, rf_size, layer, init_images, init_lbls, init_W=None,
+    def __init__(self, num_clusters, stam_id, rf_size, stride, layer, init_images, init_lbls, init_W=None,
                  img_len=49, alpha=0.01, max_layer=1, seed=None):
         self.num_clusters = num_clusters
         self.stam_id = stam_id
@@ -31,11 +31,11 @@ class STAM:
         self.init_lbls = init_lbls
         self.stat = []
         self.n = 0
+        self.stride = stride
         self.seed = seed
         self.max_layer = max_layer
         self.W = self.initialize_W(init_type=self.init_w, clusters=self.num_clusters, images=init_images,
                                    label=init_lbls, img_len=self.img_len, layer=self.layer, seed=self.seed)
-        self.check_parameters()
 
     def __call__(self, image, lbl, output_type):
         """
@@ -47,12 +47,6 @@ class STAM:
         """
         stam_output = self.stam(image, lbl, output_type)
         return stam_output
-
-    def check_parameters(self):
-        if self.W.shape[1] != self.img_len:
-            print 'initialization images have length: {}'.format(self.init_images.shape[1])
-            print 'calculated image length: {}'.format(self.img_len)
-            raise(STAM_Exception('please check initialization image dimension'))
 
     def stam(self, image, lbl, output_type):
         """
@@ -99,8 +93,9 @@ class STAM:
         """
         if init_type == 'opt':
             if layer < self.max_layer:
-                W = self.initialize_receptive_field_clusters(images, rf_size=self.rf_size,
-                                                             clusters=clusters, img_len=img_len, layer=layer, seed=seed)
+                W = self.initialize_receptive_field_clusters2(
+                    images, rf_size=self.rf_size, stride=self.stride, stam_id=self.stam_id,
+                    clusters=clusters, img_len=img_len, layer=layer, seed=seed)
             else:
                 W = self.initialize_averaged_clusters(images=images, label=label, clusters=clusters)
         elif init_type == 'random':
@@ -160,9 +155,34 @@ class STAM:
             W[i, :] = W[i, :] + rf_images[i, :]
         return W
 
+    def initialize_receptive_field_clusters2(self, init_images, rf_size, stride, stam_id, clusters, img_len, layer=0, seed=None):
+        """
+        Here we create layer 1 centroids using the receptive fields from the images
+        :param W: the centroid of the stam to be initialized
+        :param images: images from which to create receptive fields
+        :param label:
+        :param rf_size:
+        :param clusters:
+        :param m: the number of centroids imposed
+        :return: W
+        """
+        if seed is not None:
+            np.random.seed(seed)
+        init_images = copy.deepcopy(init_images)
+        W = np.zeros([clusters, img_len])
+        orignal_img_sz = int(np.sqrt(init_images.shape[1]))
+        image_RFs = list()
+
+        for i in range(clusters):
+            image_RFs.append(Hierarchy_STAM.create_receptive_field(init_images[i, :].reshape(1, orignal_img_sz*orignal_img_sz),
+                                                              rf_size=rf_size, stride=stride, layer=layer))
+        for k in range(W.shape[0]):
+            W[k] += image_RFs[k][stam_id, :]
+        return W/W.shape[0]
+
     def distance(self, W, x_t, layer):
         """
-        This function calculates the smallest distances between each centroid in W and x_t
+        This function calculates the0 smallest distances between each centroid in W and x_t
         :param W: matrix of centroids
         :param x_t: example image
         :return: the smallest two distances and their indices
@@ -273,11 +293,9 @@ class Hierarchy_STAM:
         # initialize the STAM modules...
         for i in range(self.layers):
             print 'initializing layer-{} STAMs. please wait....'.format(i+1)
-            self.stams[i] = [STAM(num_clusters=neurons[i], stam_id=k, rf_size=rf_size[i],
+            self.stams[i] = [STAM(num_clusters=neurons[i], stam_id=k, rf_size=rf_size[i], stride=stride[i],
                               layer=i, init_images=init_images, init_lbls=init_lbls, init_W=init_type[i],
                               img_len=rf_size[i]*rf_size[i], alpha=alpha, max_layer=self.layers-1) for k in range(num_stams[i])]
-
-
 
         params['neurons'] = neurons
         params['stride'] = stride
@@ -294,7 +312,7 @@ class Hierarchy_STAM:
         t = 0
         while t < data.shape[0]:
             layer = 0
-            if t > 1 and t % 50 == 0:
+            if t > 1 and t % 100 == 0:
                 print '{} images completed!'.format(t)
             image = data[t, :].reshape(1, data.shape[1])
             while layer < self.layers-1:
@@ -326,7 +344,6 @@ class Hierarchy_STAM:
         self.weights[layer] = [self.stams[layer][k](image=images[k, :].reshape(1, images.shape[1]),
                                                               lbl=lbl, output_type=self.params['output'][layer])
                                for k in range(len(self.stams[layer]))]
-
         if layer < self.layers-1:
             # reshape the list of images in self.weights[layer] into an N by M matrix
             array_length = len(self.weights[layer])
@@ -523,13 +540,13 @@ def test_red_dimension():
     seed = None
     np.set_printoptions(threshold=np.inf, linewidth=np.inf)
     images, lbl, _, _ = util.Data_Processing(num_train=10000, preprocessing='scaled').run()
-    images, lbl = util.Data_Processing.random_order(images, lbl, seed=1)
-    init_images, init_lbls = util.Data_Processing.extract_unique_m_images(images[1:1000, :], lbl[1:1000], m=17)
+    images, lbl = util.Data_Processing.random_order(images, lbl, seed=10)
+    init_images, init_lbls = util.Data_Processing.extract_unique_m_images(images[1:1000, :], lbl[1:1000], m=10)
     images = images[1000:9000, :]
     lbl = lbl[1000:9000]
     stride = [2, 1]
     layers = 2
-    neurons = (169, 10)
+    neurons = (25, 10)
     red_dim = (1, 1)
     rf_size = [4, 28]
     output = ('one_centroid', 'all_centroid')
@@ -555,8 +572,8 @@ def test_red_dimension():
         # plt.imshow(w2)
         plt.show()
         for i in range(w1.shape[0]):
-            plt.subplot(13, 13, i + 1)
-            plt.imshow(w1[i, :].reshape(4, 4))
+            plt.subplot(5, 5, i + 1)
+            plt.imshow(w1[i, :].reshape(rf_size[0], rf_size[0]))
             plt.axis('off')
         plt.show()
 
@@ -592,8 +609,8 @@ def test_red_dimension():
         # plt.imshow(w2)
         # plt.show()
         for i in range(w1.shape[0]):
-            plt.subplot(13, 13, i + 1)
-            plt.imshow(w1[i, :].reshape(4, 4))
+            plt.subplot(5, 5, i + 1)
+            plt.imshow(w1[i, :].reshape(rf_size[0], rf_size[0]))
             plt.axis('off')
         plt.show()
         print matrix
